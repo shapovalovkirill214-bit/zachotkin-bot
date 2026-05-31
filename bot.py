@@ -63,9 +63,52 @@ def send_smart_message(text):
 # Фоновый опрос сайта
 def poll_website():
     state = load_state()
-    is_first_run = (state["last_order_id"] == 0 and state["last_message_id"] == 0)
-    print("Запущен фоновый опрос сайта...")
     
+    # Принудительно приводим к int
+    state["last_order_id"] = int(state.get("last_order_id", 0))
+    state["last_message_id"] = int(state.get("last_message_id", 0))
+    
+    is_first_run = (state["last_order_id"] == 0 and state["last_message_id"] == 0)
+    
+    # Если это самый первый запуск (или после перезапуска контейнера),
+    # мы считываем всю существующую историю из БД сайта, не отправляя уведомлений в Telegram
+    if is_first_run:
+        print("Инициализация: считываем всю существующую историю из БД сайта...")
+        while True:
+            try:
+                params = {
+                    "token": API_TOKEN,
+                    "action": "get_updates",
+                    "last_order_id": state["last_order_id"],
+                    "last_message_id": state["last_message_id"]
+                }
+                response = requests.get(API_URL, params=params, timeout=10)
+                data = response.json()
+                
+                if data.get("success"):
+                    orders = data.get("orders", [])
+                    messages = data.get("messages", [])
+                    
+                    if not orders and not messages:
+                        break
+                        
+                    if orders:
+                        state["last_order_id"] = max(state["last_order_id"], max(int(o["id"]) for o in orders))
+                    if messages:
+                        state["last_message_id"] = max(state["last_message_id"], max(int(m["id"]) for m in messages))
+                        
+                    save_state(state)
+                    print(f"Считано: Заказ #{state['last_order_id']}, Сообщение #{state['last_message_id']}")
+                else:
+                    break
+            except Exception as e:
+                print(f"Ошибка при инициализации: {e}")
+                time.sleep(5)
+                
+        is_first_run = False
+        print(f"Инициализация завершена. Отслеживание новых событий начнется с Заказа #{state['last_order_id']} и Сообщения #{state['last_message_id']}")
+    
+    # Основной рабочий цикл
     while True:
         try:
             params = {
@@ -81,19 +124,10 @@ def poll_website():
                 orders = data.get("orders", [])
                 messages = data.get("messages", [])
                 
-                if is_first_run:
-                    if orders:
-                        state["last_order_id"] = max(o["id"] for o in orders)
-                    if messages:
-                        state["last_message_id"] = max(m["id"] for m in messages)
-                    save_state(state)
-                    is_first_run = False
-                    print(f"Инициализация завершена. Отслеживание с Заказа #{state['last_order_id']} и Сообщения #{state['last_message_id']}")
-                    time.sleep(3)
-                    continue
-                
+                # Обработка новых заказов
                 for order in orders:
-                    msg_text = f"🔥 <b>Новый заказ #{order['id']}!</b>\n\n"
+                    order_id = int(order["id"])
+                    msg_text = f"🔥 <b>Новый заказ #{order_id}!</b>\n\n"
                     msg_text += f"👤 <b>Имя:</b> {order['name']}\n"
                     msg_text += f"📚 <b>Тема:</b> {order['subject']}\n"
                     msg_text += f"📞 <b>Контакты:</b> {order['contact']}\n"
@@ -103,18 +137,21 @@ def poll_website():
                         msg_text += f"\n📎 <b>Файл:</b> <a href='https://zachotkin.ru/{order['file_path']}'>Скачать файл задания</a>\n"
                     
                     send_smart_message(msg_text)
-                    state["last_order_id"] = max(state["last_order_id"], order["id"])
+                    state["last_order_id"] = max(state["last_order_id"], order_id)
                     save_state(state)
                     time.sleep(0.5)
                 
+                # Обработка новых сообщений от пользователей
                 for msg in messages:
-                    msg_text = f"💬 <b>[Заказ #{msg['order_id']}] Сообщение от клиента:</b>\n\n"
+                    msg_id = int(msg["id"])
+                    msg_order_id = int(msg["order_id"])
+                    msg_text = f"💬 <b>[Заказ #{msg_order_id}] Сообщение от клиента:</b>\n\n"
                     msg_text += f"{msg['message']}"
                     if msg.get("file_path"):
                         msg_text += f"\n\n📎 <b>Файл:</b> <a href='https://zachotkin.ru/{msg['file_path']}'>Скачать вложение</a>"
                     
                     send_smart_message(msg_text)
-                    state["last_message_id"] = max(state["last_message_id"], msg["id"])
+                    state["last_message_id"] = max(state["last_message_id"], msg_id)
                     save_state(state)
                     time.sleep(0.5)
                     
