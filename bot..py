@@ -6,22 +6,15 @@ import threading
 import requests
 import telebot
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
-API_URL = os.environ.get("API_URL")
-API_TOKEN = os.environ.get("API_TOKEN")
-
-if not all([BOT_TOKEN, CHAT_ID, API_URL, API_TOKEN]):
-    print("Ошибка: Не все переменные окружения установлены!")
-    exit(1)
-
-try:
-    CHAT_ID = int(CHAT_ID)
-except ValueError:
-    print(f"Предупреждение: CHAT_ID '{CHAT_ID}' не является числом.")
+# НАСТРОЙКИ ПОДСТАВЛЕНЫ АВТОМАТИЧЕСКИ
+BOT_TOKEN = "8500140489:AAHTWa2kEqCrVaMXeyxYT1_kX400x4W-KpI"
+CHAT_ID = -1004209927131  # Верный ID вашей группы в Telegram
+API_URL = "https://zachotkin.ru/api_telegram.php"
+API_TOKEN = "secret_tg_token_9782423001"
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 STATE_FILE = "state.json"
+RESOLVED_CHAT_ID = None
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -39,10 +32,38 @@ def save_state(state):
     except Exception as e:
         print(f"Ошибка сохранения state.json: {e}")
 
+# Функция умной отправки с автоподбором знака для группы
+def send_smart_message(text):
+    global RESOLVED_CHAT_ID
+    if RESOLVED_CHAT_ID is not None:
+        try:
+            bot.send_message(RESOLVED_CHAT_ID, text)
+            return
+        except Exception as e:
+            print(f"Ошибка отправки в сохраненный чат {RESOLVED_CHAT_ID}: {e}")
+            RESOLVED_CHAT_ID = None
+            
+    chat_ids_to_try = [CHAT_ID]
+    if CHAT_ID > 0:
+        chat_ids_to_try.append(-CHAT_ID)
+        chat_ids_to_try.append(int(f"-100{CHAT_ID}"))
+        
+    errors = []
+    for cid in chat_ids_to_try:
+        try:
+            bot.send_message(cid, text)
+            RESOLVED_CHAT_ID = cid
+            print(f"Успешно отправлено в чат ID: {cid}")
+            return
+        except Exception as e:
+            errors.append(f"Чат {cid}: {e}")
+            
+    print(f"Не удалось отправить сообщение. Ошибки: {'; '.join(errors)}")
+
+# Фоновый опрос сайта
 def poll_website():
     state = load_state()
     is_first_run = (state["last_order_id"] == 0 and state["last_message_id"] == 0)
-    
     print("Запущен фоновый опрос сайта...")
     
     while True:
@@ -81,7 +102,7 @@ def poll_website():
                     if order.get("file_path"):
                         msg_text += f"\n📎 <b>Файл:</b> <a href='https://zachotkin.ru/{order['file_path']}'>Скачать файл задания</a>\n"
                     
-                    bot.send_message(CHAT_ID, msg_text)
+                    send_smart_message(msg_text)
                     state["last_order_id"] = max(state["last_order_id"], order["id"])
                     save_state(state)
                     time.sleep(0.5)
@@ -92,7 +113,7 @@ def poll_website():
                     if msg.get("file_path"):
                         msg_text += f"\n\n📎 <b>Файл:</b> <a href='https://zachotkin.ru/{msg['file_path']}'>Скачать вложение</a>"
                     
-                    bot.send_message(CHAT_ID, msg_text)
+                    send_smart_message(msg_text)
                     state["last_message_id"] = max(state["last_message_id"], msg["id"])
                     save_state(state)
                     time.sleep(0.5)
@@ -102,6 +123,7 @@ def poll_website():
             
         time.sleep(3)
 
+# Обработка Reply-ответов менеджеров в Telegram
 @bot.message_handler(func=lambda message: message.reply_to_message is not None)
 def handle_reply(message):
     parent_msg = message.reply_to_message
@@ -148,4 +170,4 @@ if __name__ == "__main__":
     t = threading.Thread(target=poll_website, daemon=True)
     t.start()
     print("Бот успешно запущен в Telegram. Ожидаем сообщений...")
-    bot.infinity_polling()# zachotkin-bot
+    bot.infinity_polling()
